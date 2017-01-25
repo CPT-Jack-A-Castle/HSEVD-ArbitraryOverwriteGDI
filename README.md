@@ -13,7 +13,7 @@
 
 Arbitrary Overwrite exploit; which exploits a vulnerable function within the HEVD Kernel driver and let us overwrite arbitrary data within Kernelland.
 
-* Instead of overwriting nt!HalDispatchTable+4 and using NtQueryIntervalProfile(), this time we're (ab)using GDI to read/write Arbitrary data within Kernelland. 
+* Instead of overwriting nt!HalDispatchTable+4 and using NtQueryIntervalProfile(), this time we're (ab)using GDI to read/write Arbitrary data within Kernelland and let us bypass KASLR and SMEP kernel protection. 
 * This technique is documented by Diego Juarez from Core Security in the following Blog post: (https://www.coresecurity.com/blog/abusing-gdi-for-ring0-exploit-primitives), so for a good understanding of this technique i recommend you to read this great post.
 * Another great tutorial from @FuzzySec on GDI Bitmap Abuse is available at (http://www.fuzzysecurity.com/tutorials/expDev/21.html).
 
