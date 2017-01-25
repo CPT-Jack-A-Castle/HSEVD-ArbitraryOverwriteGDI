@@ -1,2 +1,38 @@
-# HSEVD-ArbitraryOverwriteGDI
-HackSys Extreme Vulnerable Driver - ArbitraryOverwrite Exploit using GDI
+```
+    __  __           __   _____           
+   / / / /___ ______/ /__/ ___/__  _______
+  / /_/ / __ `/ ___/ //_/\__ \/ / / / ___/
+ / __  / /_/ / /__/ ,<  ___/ / /_/ (__  ) 
+/_/ /_/\__,_/\___/_/|_|/____/\__, /____/  
+                            /____/        
+			Extreme Vulnerable Driver
+							Exploits
+```
+
+### HackSys Extreme Vulnerable Driver - ArbitraryOverwrite Exploit using GDI
+
+Arbitrary Overwrite exploit; which exploits a vulnerable function within the HEVD Kernel driver and let us overwrite arbitrary data within Kernelland.
+
+* Instead of overwriting nt!HalDispatchTable+4 and using NtQueryIntervalProfile(), this time we're (ab)using GDI to read/write Arbitrary data within Kernelland. 
+* This technique is documented by Diego Juarez from Core Security in the following Blog post: (https://www.coresecurity.com/blog/abusing-gdi-for-ring0-exploit-primitives), so for a good understanding of this technique i recommend you to read this great post.
+* Another great tutorial from @FuzzySec on GDI Bitmap Abuse is available at (http://www.fuzzysecurity.com/tutorials/expDev/21.html).
+
+  
+Runs on:
+
+```
+This exploits has been tested on Windows 7 x86 and Windows 8.1 x64, but should run successfully on any version lower then Windows 10 < build v1611.
+``` 
+
+Compile Exploit:
+
+```
+This project is written in C and can be compiled within Visual Studio.
+```
+
+Load Vulnerable Driver:
+
+```
+The HEVD driver can be downloaded from the HackSys Team Github page and loaded with the OSR Driver loader utility.
+To run on x64, you need to install the Windows Driver Kit (WDK), Windows SDK and recompile with Visual Studio.
+```
