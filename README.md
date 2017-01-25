@@ -21,7 +21,7 @@ Arbitrary Overwrite exploit; which exploits a vulnerable function within the HEV
 Runs on:
 
 ```
-This exploits has been tested on Windows 7 x86 and Windows 8.1 x64, but should run successfully on any version lower then Windows 10 < build v1611.
+This exploits has been tested on Windows 7 x86 and Windows 8.1 x64, but should run successfully on any version lower then Windows 10 < build v1607.
 ``` 
 
 Compile Exploit:
